@@ -22,17 +22,150 @@ In the rest of this report, we follow a bottom-up approach to investigate the Li
 
 图一描绘了关于网络的代码在Linux Kernel中的分布。大多数的代码在net/ipv4下。剩下的相关代码在net/core及net/sched下。头文件可以在include/linux及include/net下找到。
 
-图一
+![A](./figure1.png)
+
+​												图一
 
 关于内核的网络代码，开发者可以通过将自己的代码挂在netfilter的钩子(hooks)上，用来分析或者改变数据包。在这份文档中，我们使用HOOK符号在图表中进行标记。
 
+
+
+图2和图3呈现了一个数据包在内核中的一个大致流向。它们解释了硬件和驱动代码是如何工作，以及内核协议栈和内核与应用层接口。
+
+![a](./figure2.png)
+
+​								图二 	接收TCP报文
+
+![b](./figure3.png)
+
+​								图三	发送TCP报文
+
 #### 通用数据结构
+
+​	网路部分的内核主要使用两种数据结构，一是保持一个连接的状态，叫做sock(为socket而生)，而另一种是保存收包发包的数据和状态的，叫做sk_buff。这些将在这一节做详细的阐述。我们也有一个对于tcp_opt的简单介绍。这是sock结构体的一部分，被用来保存TCP连接的状态。对于TCP的详情将在第六章节呈现。
 
 ##### Socket buffers
 
+​	sk_buff数据结构定义在include/linux/skbuff.h
+
+​	当一个数据包在内核被加工处理，无论是从用户层还是从网卡而来，针对于该包的sk_buff数据结构就会生成。修改一个数据包的字段是通过修改其结构体里的字段来实现的。在网络中，世界上每一个被调用的函数都会有一个sk_buff(这个变量通常被叫做skb)当做参数被传入进去。
+
+​	这个结构体的头两个字段是两个指针，分别是指向下一个buffer的链表指针和当前buffer在链表中的位置(数据包经常以链表或者队列的形式来存储)。sk_buff_head 指向这个链表的头部。
+
+​	拥有该数据包的套接字也是保存在sk_buff中的饿一个字段(值得注意的是如果这个数据包来自网络层，那么这个skb拥有者只能在下一层被知道)。
+
+​	该包到来的时间被存储在一个时间戳中，叫做stamp。当接收到一个包，dev字段中存储了这个包所到达的设备信息。当这个设备是用来传输数据包的(比如被用来检查路由表)，这个dev字段就会被因此而得到更新。
+
+```c
+
+ struct sk_buff {
+     /* These two members must be first. */
+     struct sk_buff *next; struct sk_buff *prev; struct sk_buff_head *list; struct sock *sk;
+     struct timeval stamp; struct net_device *dev;
+     /* Next buffer in list */
+     /* Previous buffer in list*/
+     /* List we are on */
+     /* Socket we are owned by */
+     /* Time we arrived */
+     /* Device we arrived on/are leaving by */
+```
+
+​	传输字段是一个联合体指向相关传输层结构体(TCP、UDP、ICMP，etc)。
+
+```c
+	 /* Transport layer header */
+	 union
+	 {
+       struct tcphdr  *th;
+       struct udphdr  *uh;
+       struct icmphdr *icmph;
+       struct igmphdr *igmph;
+       struct iphdr   *ipiph;
+       struct spxhdr  *spxh;
+       unsigned char  *raw;
+	 } h;
+```
+
+网络层头部指向当前相关的数据结构。
+
+```c
+	 /* Network layer header */
+	 union
+	 {
+       struct iphdr   *iph;
+       struct ipv6hdr *ipv6h;
+       struct arphdr  *arph;
+       struct ipxhdr  *ipxh;
+       unsigned char  *raw;
+	 } nh;
+```
+
+链路层存储在一个命名为mac的联合体中。只有一些特殊的以太网字段被含括进来了。可以通过转换联合体来使用这些原始字段。
+
+```c
+ /* Link layer header */
+     union
+     {
+             struct ethhdr *ethernet;
+             unsigned char *raw;
+     } mac;
+     struct  dst_entry *dst;
+```
+
+在这个结构体中，这个数据包的长度，数据长度，校验和及包类型等被存储在以下字段。
+
+```
+	char cb[48];
+	unsigned int len;		/**/
+```
+
 ##### sock
 
+sock数据结构保存了关于TCP连接与UPD连接。当在用户空间中创建一个套接字的时候，便分配了一个sock结构体的内存。
+
+第一个字段包含源和目的地址还有套接字对的端口号。
+
+```c
+ struct sock {
+     /* Socket demultiplex comparisons on incoming packets. */
+   __u32
+     __u32
+     __u16
+    unsigned short num;
+   int bound_dev_if;
+   /* Foreign IPv4 address */
+   /* Bound local IPv4 address */
+   /* Destination port */
+   /* Local port */
+   /* Bound device index if != 0 */
+```
+
+在其他字段中，一个sock结构体包含详细协议的信息。这些字段包含了每一层协议的状态信息。
+
+```c
+	union {
+      struct_ipv6_pinfo af_inet6;
+	} net_pinfo;
+	union {
+      struct tcp_opt	af_tcp;
+      struct raw_opt	tp_raw4;
+      struct raw6_opt	tp_raw;
+      struct spx_opt	af_spx;
+	} tp_pinfo;
+};
+```
+
+
+
 ##### 有关TCP的操作
+
+关于sock，一个重要的组件之一就是TCP操作字段。IP和UPD是无状态的协议，只需要很少的字段来存储它们的连接信息。然而TCP需要设置大量的变量。这些变量被存储在tcp_opt结构的字段中，下面展示的是一些相关的字段。
+
+```
+
+```
+
+
 
 #### Sub-IP 层
 
